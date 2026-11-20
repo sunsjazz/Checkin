@@ -72,33 +72,60 @@
     };
 
     // 啟動相機掃描
-    function startScanner() {
-      const staffName = document.getElementById('staffName').value.trim();
-      if (!staffName) {
-        alert("請先輸入「接待同仁」姓名再開始掃描！");
-        document.getElementById('staffName').focus();
-        return;
-      }
-      // 記住接待同仁姓名
-      localStorage.setItem('checkin_staff_name', staffName);
-
-      document.getElementById('reader').style.display = 'block';
-      document.getElementById('startBtn').style.display = 'none';
-      document.getElementById('stopBtn').style.display = 'block';
-
+        async function startCamera() {
       if (!html5QrCode) {
         html5QrCode = new Html5Qrcode("reader");
       }
 
-      const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+      const config = { 
+        fps: 10, 
+        qrbox: { width: 250, height: 250 },
+        // 加入進階相機參數：強制連續自動對焦並設定 1x~1.5x 變焦（可改善廣角感）
+        videoConstraints: {
+          facingMode: "environment",
+          focusMode: "continuous",
+          zoom: 1.5
+        }
+      };
 
-      // 優先開啟手機後置鏡頭 (environment)
-      html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess)
-        .catch(err => {
-          alert("無法啟動相機，請確認已允許瀏覽器使用相機權限。\n錯誤訊息：" + err);
-          resetButtons();
-        });
+      try {
+        // 1. 先取得手機所有可用的相機清單
+        const devices = await Html5Qrcode.getCameras();
+        let targetCameraId = { facingMode: "environment" }; // 預設值
+
+        if (devices && devices.length > 0) {
+          // 過濾出所有的後置鏡頭 (label 通常包含 back 或 rear)
+          const backCameras = devices.filter(d => 
+            d.label.toLowerCase().includes('back') || 
+            d.label.toLowerCase().includes('rear') ||
+            d.label.includes('後置')
+          );
+
+          // 排除超廣角 (ultra-wide / 0.5 / 0.6) 與微距 (macro) 鏡頭，優先挑選標準主鏡頭
+          const mainCamera = backCameras.find(d => {
+            const label = d.label.toLowerCase();
+            return !label.includes('wide') && !label.includes('0.5') && !label.includes('0.6') && !label.includes('macro');
+          });
+
+          // 若有明確標示主鏡頭則指定其 ID；否則在多顆後鏡頭中通常第一顆 (camera2 0) 為主鏡頭
+          if (mainCamera) {
+            targetCameraId = mainCamera.id;
+          } else if (backCameras.length > 0) {
+            targetCameraId = backCameras[0].id;
+          }
+        }
+
+        // 2. 啟動指定的標準鏡頭
+        await html5QrCode.start(targetCameraId, config, onScanSuccess);
+        isScanning = true;
+        document.getElementById('btn-toggle').textContent = "暫停相機";
+        document.getElementById('btn-toggle').style.backgroundColor = "#757575";
+
+      } catch (err) {
+        alert("無法啟動相機，請確認瀏覽器已允許相機權限！\n錯誤：" + err);
+      }
     }
+
 
     // 關閉相機掃描
     function stopScanner() {
