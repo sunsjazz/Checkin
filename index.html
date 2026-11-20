@@ -55,9 +55,6 @@
   </div>
 
   <script>
-    // ==========================================
-    // 🔴 請在此貼上你部署好的 GAS 網頁應用程式網址
-    // ==========================================
     const GAS_API_URL = "https://script.google.com/macros/s/AKfycbxqIfjKgxWT2Ry6Gy673ABJD0D1oPM-Mjj94EifVQZ8VheRGALvm0t-4pRNVy5VXEdIjQ/exec";
 
     let html5QrCode = null;
@@ -71,22 +68,33 @@
       }
     };
 
-    // 啟動相機掃描
-    async function startCamera() {
+    // 啟動相機掃描（名稱已與上方按鈕 onclick="startScanner()" 對齊）
+    async function startScanner() {
+      const staffName = document.getElementById('staffName').value.trim();
+      if (!staffName) {
+        alert("請先輸入「接待同仁」姓名再開始掃描！");
+        document.getElementById('staffName').focus();
+        return;
+      }
+      localStorage.setItem('checkin_staff_name', staffName);
+
+      // 顯示相機區塊與切換按鈕
+      document.getElementById('reader').style.display = 'block';
+      document.getElementById('startBtn').style.display = 'none';
+      document.getElementById('stopBtn').style.display = 'block';
+
       if (!html5QrCode) {
         html5QrCode = new Html5Qrcode("reader");
       }
 
-      // 保持最純淨的掃描設定，避免與 cameraId 衝突
       const config = { fps: 10, qrbox: { width: 250, height: 250 } };
 
       try {
-        // 1. 取得相機清單
+        // 1. 取得相機清單，過濾出標準後置主鏡頭（避開超廣角與微距）
         const devices = await Html5Qrcode.getCameras();
-        let targetCamera = { facingMode: "environment" }; // 預設後置鏡頭
+        let targetCamera = { facingMode: "environment" };
 
         if (devices && devices.length > 0) {
-          // 篩選出後置鏡頭
           const backCameras = devices.filter(d => 
             d.label.toLowerCase().includes('back') || 
             d.label.toLowerCase().includes('rear') ||
@@ -94,24 +102,18 @@
           );
 
           if (backCameras.length > 0) {
-            // 排除超廣角 (wide / 0.5 / 0.6) 與微距 (macro)
             const mainCamera = backCameras.find(d => {
               const label = d.label.toLowerCase();
               return !label.includes('wide') && !label.includes('0.5') && !label.includes('0.6') && !label.includes('macro');
             });
-            // 優先用過濾出的主鏡頭；若全部都含 wide 字眼（例如 Samsung 命名為 camera2 0, facing back (wide)），則強制選最後一顆或第一顆主鏡頭
             targetCamera = mainCamera ? mainCamera.id : backCameras[0].id;
           }
         }
 
-        // 2. 純淨啟動相機（不帶任何容易報錯的額外 Constraints）
+        // 2. 啟動相機
         await html5QrCode.start(targetCamera, config, onScanSuccess);
-        
-        isScanning = true;
-        document.getElementById('btn-toggle').textContent = "暫停相機";
-        document.getElementById('btn-toggle').style.backgroundColor = "#757575";
 
-        // 3. 畫面啟動成功後，安全地套用 1.5 倍變焦消除廣角感（若硬體不支援會自動忽略，不影響掃描）
+        // 3. 畫面啟動成功後，安全地套用 1.5 倍變焦消除廣角感
         setTimeout(() => {
           try {
             const videoElement = document.querySelector('#reader video');
@@ -119,18 +121,18 @@
               const track = videoElement.srcObject.getVideoTracks()[0];
               const capabilities = track.getCapabilities ? track.getCapabilities() : {};
               if (capabilities.zoom) {
-                // 在硬體允許的最小與最大變焦範圍內，設定 1.5 倍（若覺太近可改 1.3）
                 const targetZoom = Math.min(Math.max(1.5, capabilities.zoom.min), capabilities.zoom.max);
                 track.applyConstraints({ advanced: [{ zoom: targetZoom }] });
               }
             }
           } catch (zoomErr) {
-            console.log("此裝置不支援網頁調整焦距，維持預設焦距:", zoomErr);
+            console.log("維持預設焦距:", zoomErr);
           }
         }, 500);
 
       } catch (err) {
-        alert("無法啟動相機！\n錯誤：" + err);
+        alert("無法啟動相機，請確認已允許瀏覽器使用相機權限。\n錯誤訊息：" + err);
+        resetButtons();
       }
     }
 
@@ -151,19 +153,16 @@
 
     // 成功讀取到 QR Code 時觸發
     function onScanSuccess(decodedText) {
-      if (isProcessing) return; // 若正在處理上一筆，忽略此次掃描
+      if (isProcessing) return;
       isProcessing = true;
 
-      // 播放提示音或震動（Android 支援）
       if (navigator.vibrate) navigator.vibrate(100);
 
       const staffName = document.getElementById('staffName').value.trim();
       document.getElementById('loading').style.display = 'block';
 
-      // 呼叫 GAS 後端 API
       fetch(GAS_API_URL, {
         method: 'POST',
-        // 使用 text/plain 可避開 CORS OPTIONS 預檢請求，GAS 的 doPost 仍可正常讀取 e.postData.contents
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
           qrUrl: decodedText,
@@ -183,7 +182,6 @@
       })
       .finally(() => {
         document.getElementById('loading').style.display = 'none';
-        // 冷卻 2.5 秒後才允許掃描下一位來賓，避免鏡頭對著同一個碼重複觸發
         setTimeout(() => {
           isProcessing = false;
         }, 2500);
