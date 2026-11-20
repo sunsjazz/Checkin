@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>現場來賓 QR Code 報到系統</title>
+  <!-- 引入 html5-qrcode 即時掃描套件 -->
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    body { margin: 0; padding: 16px; background-color: #f0f2f5; color: #333; display: flex; flex-direction: column; align-items: center; }
+    .card { width: 100%; max-width: 480px; background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 16px; }
+    h2 { margin: 0 0 20px 0; text-align: center; font-size: 20px; color: #1a3b5c; }
+    .form-group { display: flex; align-items: center; margin-bottom: 20px; gap: 10px; }
+    .form-group label { font-weight: 600; white-space: nowrap; color: #444; }
+    .form-group input { flex: 1; padding: 10px 14px; border: 1.5px solid #ccc; border-radius: 8px; font-size: 16px; outline: none; transition: border-color 0.2s; }
+    .form-group input:focus { border-color: #0b57d0; }
+    .btn { width: 100%; padding: 14px; border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+    .btn-primary { background-color: #0b57d0; color: #fff; }
+    .btn-danger { background-color: #d93025; color: #fff; margin-top: 12px; }
+    .btn:active { opacity: 0.85; }
+    #reader { width: 100%; border-radius: 12px; overflow: hidden; margin-top: 16px; display: none; background: #000; }
+    
+    /* 報到結果顯示區塊 */
+    #result-card { display: none; border-left: 6px solid #ccc; }
+    .status-SUCCESS { border-left-color: #1e8e3e !important; background-color: #e6f4ea; }
+    .status-ALREADY_CHECKED_IN { border-left-color: #f9ab00 !important; background-color: #fef7e0; }
+    .status-NOT_FOUND, .status-ERROR, .status-EMPTY { border-left-color: #d93025 !important; background-color: #fce8e6; }
+    .result-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
+    .guest-detail { font-size: 15px; line-height: 1.6; color: #222; }
+    .loading { text-align: center; color: #0b57d0; font-weight: bold; margin-top: 12px; display: none; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>📋 來賓 QR Code 快速報到</h2>
+    
+    <div class="form-group">
+      <label for="staffName">接待同仁：</label>
+      <input type="text" id="staffName" placeholder="請輸入您的姓名">
+    </div>
+
+    <button id="startBtn" class="btn btn-primary" onclick="startScanner()">開啟手機鏡頭掃描</button>
+    <button id="stopBtn" class="btn btn-danger" style="display:none;" onclick="stopScanner()">關閉鏡頭</button>
+
+    <div id="reader"></div>
+    <div id="loading" class="loading">⏳ 正在核對資料並寫入報到紀錄...</div>
+  </div>
+
+  <!-- 報到結果提示卡 -->
+  <div id="result-card" class="card">
+    <div id="result-title" class="result-title"></div>
+    <div id="result-detail" class="guest-detail"></div>
+  </div>
+
+  <script>
+    // ==========================================
+    // 🔴 請在此貼上你部署好的 GAS 網頁應用程式網址
+    // ==========================================
+    const GAS_API_URL = "https://script.google.com/macros/s/AKfycbxqIfjKgxWT2Ry6Gy673ABJD0D1oPM-Mjj94EifVQZ8VheRGALvm0t-4pRNVy5VXEdIjQ/exec";
+
+    let html5QrCode = null;
+    let isProcessing = false; // 防止連續重複掃描鎖定旗標
+
+    // 頁面載入時，自動帶入上次輸入過的接待同仁姓名
+    window.onload = function() {
+      const savedStaff = localStorage.getItem('checkin_staff_name');
+      if (savedStaff) {
+        document.getElementById('staffName').value = savedStaff;
+      }
+    };
+
+    // 啟動相機掃描
+    function startScanner() {
+      const staffName = document.getElementById('staffName').value.trim();
+      if (!staffName) {
+        alert("請先輸入「接待同仁」姓名再開始掃描！");
+        document.getElementById('staffName').focus();
+        return;
+      }
+      // 記住接待同仁姓名
+      localStorage.setItem('checkin_staff_name', staffName);
+
+      document.getElementById('reader').style.display = 'block';
+      document.getElementById('startBtn').style.display = 'none';
+      document.getElementById('stopBtn').style.display = 'block';
+
+      if (!html5QrCode) {
+        html5QrCode = new Html5Qrcode("reader");
+      }
+
+      const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+
+      // 優先開啟手機後置鏡頭 (environment)
+      html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess)
+        .catch(err => {
+          alert("無法啟動相機，請確認已允許瀏覽器使用相機權限。\n錯誤訊息：" + err);
+          resetButtons();
+        });
+    }
+
+    // 關閉相機掃描
+    function stopScanner() {
+      if (html5QrCode) {
+        html5QrCode.stop().then(() => {
+          resetButtons();
+        }).catch(err => console.error("停止掃描失敗", err));
+      }
+    }
+
+    function resetButtons() {
+      document.getElementById('reader').style.display = 'none';
+      document.getElementById('startBtn').style.display = 'block';
+      document.getElementById('stopBtn').style.display = 'none';
+    }
+
+    // 成功讀取到 QR Code 時觸發
+    function onScanSuccess(decodedText) {
+      if (isProcessing) return; // 若正在處理上一筆，忽略此次掃描
+      isProcessing = true;
+
+      // 播放提示音或震動（Android 支援）
+      if (navigator.vibrate) navigator.vibrate(100);
+
+      const staffName = document.getElementById('staffName').value.trim();
+      document.getElementById('loading').style.display = 'block';
+
+      // 呼叫 GAS 後端 API
+      fetch(GAS_API_URL, {
+        method: 'POST',
+        // 使用 text/plain 可避開 CORS OPTIONS 預檢請求，GAS 的 doPost 仍可正常讀取 e.postData.contents
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          qrUrl: decodedText,
+          staffName: staffName
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        showResult(data);
+      })
+      .catch(error => {
+        showResult({
+          status: 'ERROR',
+          message: '❌ 連線失敗，請檢查網路狀態或 GAS 部署設定。',
+          detail: error.toString()
+        });
+      })
+      .finally(() => {
+        document.getElementById('loading').style.display = 'none';
+        // 冷卻 2.5 秒後才允許掃描下一位來賓，避免鏡頭對著同一個碼重複觸發
+        setTimeout(() => {
+          isProcessing = false;
+        }, 2500);
+      });
+    }
+
+    // 顯示報到結果卡片
+    function showResult(data) {
+      const card = document.getElementById('result-card');
+      const titleEl = document.getElementById('result-title');
+      const detailEl = document.getElementById('result-detail');
+
+      card.style.display = 'block';
+      card.className = 'card status-' + data.status;
+      titleEl.innerText = data.message;
+
+      if (data.status === 'SUCCESS' || data.status === 'ALREADY_CHECKED_IN') {
+        detailEl.innerHTML = `
+          <strong>姓名：</strong>${data.name}<br>
+          <strong>公司：</strong>${data.company}<br>
+          <strong>部門 / 職稱：</strong>${data.dept} ${data.title}<br>
+          <strong>報到時間：</strong>${data.checkinTime}
+        `;
+      } else {
+        detailEl.innerHTML = data.detail ? `<small>${data.detail}</small>` : '請重新確認 QR Code 內容。';
+      }
+    }
+  </script>
+</body>
+</html>
