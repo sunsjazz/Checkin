@@ -10,7 +10,7 @@
     body { margin: 0; padding: 16px; background-color: #f0f2f5; color: #333; display: flex; flex-direction: column; align-items: center; }
     .card { width: 100%; max-width: 480px; background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 16px; }
     h2 { margin: 0 0 20px 0; text-align: center; font-size: 20px; color: #1a3b5c; }
-    .form-group { display: flex; align-items: center; margin-bottom: 20px; gap: 10px; }
+    .form-group { display: flex; align-items: center; margin-bottom: 16px; gap: 10px; }
     .form-group label { font-weight: 600; white-space: nowrap; color: #444; }
     .form-group input { flex: 1; padding: 10px 14px; border: 1.5px solid #ccc; border-radius: 8px; font-size: 16px; outline: none; transition: border-color 0.2s; }
     .form-group input:focus { border-color: #0b57d0; }
@@ -20,16 +20,19 @@
     .btn-group { display: flex; gap: 10px; margin-top: 12px; }
     .btn-switch { flex: 1; background-color: #f1f3f4; color: #1a3b5c; border: 1px solid #dadce0; }
     .btn-danger { flex: 1; background-color: #d93025; color: #fff; }
-    .btn:active { opacity: 0.85; }
+    .btn:disabled { background-color: #9bb8e8; cursor: not-allowed; }
+    .btn:active:not(:disabled) { opacity: 0.85; }
     
     #reader { width: 100%; border-radius: 12px; overflow: hidden; margin-top: 16px; display: none; background: #000; }
     #camera-info { font-size: 12px; color: #666; text-align: center; margin-top: 6px; display: none; }
+    .auth-error { color: #d93025; font-size: 14px; text-align: center; margin-top: 12px; display: none; font-weight: 600; }
+    .logout-link { display: block; text-align: right; font-size: 13px; color: #666; margin-bottom: 12px; text-decoration: underline; cursor: pointer; }
     
     /* 報到結果顯示區塊 */
     #result-card { display: none; border-left: 6px solid #ccc; }
     .status-SUCCESS { border-left-color: #1e8e3e !important; background-color: #e6f4ea; }
     .status-ALREADY_CHECKED_IN { border-left-color: #f9ab00 !important; background-color: #fef7e0; }
-    .status-NOT_FOUND, .status-ERROR, .status-EMPTY { border-left-color: #d93025 !important; background-color: #fce8e6; }
+    .status-NOT_FOUND, .status-ERROR, .status-EMPTY, .status-UNAUTHORIZED { border-left-color: #d93025 !important; background-color: #fce8e6; }
     .result-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
     .guest-detail { font-size: 15px; line-height: 1.6; color: #222; }
     .loading { text-align: center; color: #0b57d0; font-weight: bold; margin-top: 12px; display: none; }
@@ -37,7 +40,20 @@
 </head>
 <body>
 
-  <div class="card">
+  <!-- 畫面 1：通行密碼驗證區 -->
+  <div id="auth-card" class="card">
+    <h2>🔐 接待人員身分驗證</h2>
+    <div class="form-group">
+      <label for="passcodeInput">通行密碼：</label>
+      <input type="password" id="passcodeInput" placeholder="請輸入現場通行密碼" onkeyup="if(event.key==='Enter') verifyPasscode()">
+    </div>
+    <button id="verifyBtn" class="btn btn-primary" onclick="verifyPasscode()">驗證並進入系統</button>
+    <div id="auth-error" class="auth-error"></div>
+  </div>
+
+  <!-- 畫面 2：主掃描報到區（驗證通過後才顯示） -->
+  <div id="main-card" class="card" style="display:none;">
+    <span class="logout-link" onclick="logout()">鎖定 / 登出系統</span>
     <h2>📋 來賓 QR Code 快速報到</h2>
     
     <div class="form-group">
@@ -70,13 +86,83 @@
     let isProcessing = false;
     let backCameras = [];
     let currentCamIndex = 0;
+    let verifiedPasscode = "";
 
     window.onload = function() {
       const savedStaff = localStorage.getItem('checkin_staff_name');
       if (savedStaff) {
         document.getElementById('staffName').value = savedStaff;
       }
+
+      // 若本機曾通過驗證，自動向後端靜默確認密碼是否仍有效
+      const savedPasscode = localStorage.getItem('checkin_passcode');
+      if (savedPasscode) {
+        document.getElementById('passcodeInput').value = savedPasscode;
+        verifyPasscode(true);
+      }
     };
+
+    // 向 GAS 後端驗證通行密碼
+    function verifyPasscode(isAutoLogin = false) {
+      const inputVal = document.getElementById('passcodeInput').value.trim();
+      const errorEl = document.getElementById('auth-error');
+      const btn = document.getElementById('verifyBtn');
+
+      if (!inputVal) {
+        errorEl.innerText = "請輸入通行密碼！";
+        errorEl.style.display = 'block';
+        return;
+      }
+
+      errorEl.style.display = 'none';
+      btn.disabled = true;
+      btn.innerText = "驗證中，請稍候...";
+
+      fetch(GAS_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'verify',
+          passcode: inputVal
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success && data.status === 'VERIFIED') {
+          verifiedPasscode = inputVal;
+          localStorage.setItem('checkin_passcode', inputVal);
+          document.getElementById('auth-card').style.display = 'none';
+          document.getElementById('main-card').style.display = 'block';
+        } else {
+          localStorage.removeItem('checkin_passcode');
+          if (!isAutoLogin) {
+            errorEl.innerText = data.message || "密碼錯誤，請重新輸入！";
+            errorEl.style.display = 'block';
+          }
+        }
+      })
+      .catch(err => {
+        if (!isAutoLogin) {
+          errorEl.innerText = "連線失敗，請檢查網路狀態！";
+          errorEl.style.display = 'block';
+        }
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.innerText = "驗證並進入系統";
+      });
+    }
+
+    // 登出並清除記憶的密碼
+    function logout() {
+      stopScanner();
+      verifiedPasscode = "";
+      localStorage.removeItem('checkin_passcode');
+      document.getElementById('passcodeInput').value = "";
+      document.getElementById('main-card').style.display = 'none';
+      document.getElementById('result-card').style.display = 'none';
+      document.getElementById('auth-card').style.display = 'block';
+    }
 
     async function startScanner() {
       const staffName = document.getElementById('staffName').value.trim();
@@ -98,16 +184,13 @@
       try {
         const devices = await Html5Qrcode.getCameras();
         if (devices && devices.length > 0) {
-          // 過濾出所有後置鏡頭
           backCameras = devices.filter(d => 
             d.label.toLowerCase().includes('back') || 
             d.label.toLowerCase().includes('rear') ||
             d.label.includes('後置')
           );
-          // 若無法辨識前後置，則列入全部鏡頭
           if (backCameras.length === 0) backCameras = devices;
 
-          // 讀取上次記憶的鏡頭索引，若無紀錄且有多顆後鏡頭，預設跳過第 0 顆（常為廣角）改用第 1 顆
           const savedIndex = localStorage.getItem('preferred_cam_index');
           if (savedIndex !== null && backCameras[parseInt(savedIndex)]) {
             currentCamIndex = parseInt(savedIndex);
@@ -115,9 +198,7 @@
             currentCamIndex = backCameras.length > 1 ? 1 : 0;
           }
 
-          // 若只有 1 顆鏡頭則隱藏切換按鈕
           document.getElementById('switchBtn').style.display = backCameras.length > 1 ? 'block' : 'none';
-
           await launchCameraByIndex(currentCamIndex);
         } else {
           await html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 250 } }, onScanSuccess);
@@ -131,19 +212,15 @@
     async function launchCameraByIndex(index) {
       const cam = backCameras[index];
       const config = { fps: 10, qrbox: { width: 250, height: 250 } };
-      
       await html5QrCode.start(cam.id, config, onScanSuccess);
       
-      // 顯示目前使用的鏡頭資訊，方便確認
       const infoEl = document.getElementById('camera-info');
       infoEl.style.display = 'block';
       infoEl.textContent = `目前鏡頭 (${index + 1}/${backCameras.length})：${cam.label || '後置鏡頭'}`;
     }
 
-    // 手動切換下一顆鏡頭並記住選擇
     async function switchCamera() {
       if (backCameras.length <= 1 || !html5QrCode) return;
-      
       try {
         await html5QrCode.stop();
         currentCamIndex = (currentCamIndex + 1) % backCameras.length;
@@ -182,12 +259,20 @@
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
+          action: 'checkin',
+          passcode: verifiedPasscode,
           qrUrl: decodedText,
           staffName: staffName
         })
       })
       .then(response => response.json())
       .then(data => {
+        // 若中途管理員在後台更改了密碼，會自動踢回登入畫面
+        if (data.status === 'UNAUTHORIZED') {
+          alert(data.message);
+          logout();
+          return;
+        }
         showResult(data);
       })
       .catch(error => {
