@@ -350,6 +350,10 @@
         console.warn("音效播放失敗：", e);
       }
     }
+    function onScanSuccess(decodedText, decodedResult) {
+      playScanFeedback("success");
+      // ...原本處理報到與顯示 result-box 的邏輯
+    }
   </script>
 </body>
 </html>
