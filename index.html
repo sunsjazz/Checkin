@@ -87,6 +87,84 @@
     let backCameras = [];
     let currentCamIndex = 0;
     let verifiedPasscode = "";
+    let audioCtx = null;
+
+    // 必須在使用者點擊按鈕時呼叫，用來建立並解鎖瀏覽器 AudioContext
+    function unlockAudio() {
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+
+        if (!audioCtx) {
+          audioCtx = new AudioContextClass();
+        }
+        if (audioCtx.state === "suspended") {
+          audioCtx.resume();
+        }
+
+        // 播放極短無聲脈衝，協助部分手機瀏覽器完成音訊解鎖
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.02);
+      } catch (e) {
+        console.warn("解鎖音效失敗：", e);
+      }
+    }
+
+    // 播放掃碼提示音與震動（type: "success" | "warn"）
+    function playScanFeedback(type = "success") {
+      if (navigator.vibrate) {
+        navigator.vibrate(type === "success" ? 120 : [120, 60, 120]);
+      }
+
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+
+        if (!audioCtx) {
+          audioCtx = new AudioContextClass();
+        }
+        if (audioCtx.state === "suspended") {
+          audioCtx.resume();
+        }
+
+        const now = audioCtx.currentTime;
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+
+        if (type === "success") {
+          // 清脆高音「嗶」
+          oscillator.type = "sine";
+          oscillator.frequency.setValueAtTime(1046.5, now);
+          gainNode.gain.setValueAtTime(0.3, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+
+          oscillator.connect(gainNode);
+          gainNode.connect(audioCtx.destination);
+          oscillator.start(now);
+          oscillator.stop(now + 0.16);
+        } else {
+          // 重複或異常的低沉雙聲提示
+          oscillator.type = "triangle";
+          oscillator.frequency.setValueAtTime(360, now);
+          oscillator.frequency.setValueAtTime(280, now + 0.14);
+
+          gainNode.gain.setValueAtTime(0.3, now);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+          oscillator.connect(gainNode);
+          gainNode.connect(audioCtx.destination);
+          oscillator.start(now);
+          oscillator.stop(now + 0.3);
+        }
+      } catch (e) {
+        console.warn("音效播放失敗：", e);
+      }
+    }
 
     window.onload = function() {
       const savedStaff = localStorage.getItem('checkin_staff_name');
@@ -94,7 +172,6 @@
         document.getElementById('staffName').value = savedStaff;
       }
 
-      // 若本機曾通過驗證，自動向後端靜默確認密碼是否仍有效
       const savedPasscode = localStorage.getItem('checkin_passcode');
       if (savedPasscode) {
         document.getElementById('passcodeInput').value = savedPasscode;
@@ -102,8 +179,11 @@
       }
     };
 
-    // 向 GAS 後端驗證通行密碼
     function verifyPasscode(isAutoLogin = false) {
+      if (!isAutoLogin) {
+        unlockAudio();
+      }
+
       const inputVal = document.getElementById('passcodeInput').value.trim();
       const errorEl = document.getElementById('auth-error');
       const btn = document.getElementById('verifyBtn');
@@ -153,7 +233,6 @@
       });
     }
 
-    // 登出並清除記憶的密碼
     function logout() {
       stopScanner();
       verifiedPasscode = "";
@@ -165,6 +244,8 @@
     }
 
     async function startScanner() {
+      unlockAudio();
+
       const staffName = document.getElementById('staffName').value.trim();
       if (!staffName) {
         alert("請先輸入「接待同仁」姓名再開始掃描！");
@@ -184,8 +265,8 @@
       try {
         const devices = await Html5Qrcode.getCameras();
         if (devices && devices.length > 0) {
-          backCameras = devices.filter(d => 
-            d.label.toLowerCase().includes('back') || 
+          backCameras = devices.filter(d =>
+            d.label.toLowerCase().includes('back') ||
             d.label.toLowerCase().includes('rear') ||
             d.label.includes('後置')
           );
@@ -213,7 +294,7 @@
       const cam = backCameras[index];
       const config = { fps: 10, qrbox: { width: 250, height: 250 } };
       await html5QrCode.start(cam.id, config, onScanSuccess);
-      
+
       const infoEl = document.getElementById('camera-info');
       infoEl.style.display = 'block';
       infoEl.textContent = `目前鏡頭 (${index + 1}/${backCameras.length})：${cam.label || '後置鏡頭'}`;
@@ -250,8 +331,6 @@
       if (isProcessing) return;
       isProcessing = true;
 
-      if (navigator.vibrate) navigator.vibrate(100);
-
       const staffName = document.getElementById('staffName').value.trim();
       document.getElementById('loading').style.display = 'block';
 
@@ -267,15 +346,17 @@
       })
       .then(response => response.json())
       .then(data => {
-        // 若中途管理員在後台更改了密碼，會自動踢回登入畫面
         if (data.status === 'UNAUTHORIZED') {
+          playScanFeedback("warn");
           alert(data.message);
           logout();
           return;
         }
+        playScanFeedback(data.status === 'SUCCESS' ? "success" : "warn");
         showResult(data);
       })
       .catch(error => {
+        playScanFeedback("warn");
         showResult({
           status: 'ERROR',
           message: '❌ 連線失敗，請檢查網路狀態或 GAS 部署設定。',
@@ -310,50 +391,4 @@
         detailEl.innerHTML = data.detail ? `<small>${data.detail}</small>` : '請重新確認 QR Code 內容。';
       }
     }
-
-    let audioCtx = null;
-
-    function playScanFeedback(type = "success") {
-      // 1. 觸發手機短震動（iOS Safari 通常不支援，Android 瀏覽器支援）
-      if (navigator.vibrate) {
-        navigator.vibrate(type === "success" ? 120 : [100, 50, 100]);
-      }
-    
-      // 2. 播放 Web Audio 提示音
-      try {
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContextClass) return;
-    
-        if (!audioCtx) {
-          audioCtx = new AudioContextClass();
-        }
-        if (audioCtx.state === "suspended") {
-          audioCtx.resume();
-        }
-    
-        const oscillator = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
-    
-        // 成功用較清脆的高頻（如 1046Hz），重複或異常可用較低頻率區分
-        oscillator.type = "sine";
-        oscillator.frequency.setValueAtTime(type === "success" ? 1046 : 440, audioCtx.currentTime);
-    
-        gainNode.gain.setValueAtTime(0.25, audioCtx.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
-    
-        oscillator.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-    
-        oscillator.start();
-        oscillator.stop(audioCtx.currentTime + 0.15);
-      } catch (e) {
-        console.warn("音效播放失敗：", e);
-      }
-    }
-    function onScanSuccess(decodedText, decodedResult) {
-      playScanFeedback("success");
-      // ...原本處理報到與顯示 result-box 的邏輯
-    }
   </script>
-</body>
-</html>
