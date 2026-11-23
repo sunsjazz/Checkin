@@ -310,6 +310,46 @@
         detailEl.innerHTML = data.detail ? `<small>${data.detail}</small>` : '請重新確認 QR Code 內容。';
       }
     }
+
+    let audioCtx = null;
+
+    function playScanFeedback(type = "success") {
+      // 1. 觸發手機短震動（iOS Safari 通常不支援，Android 瀏覽器支援）
+      if (navigator.vibrate) {
+        navigator.vibrate(type === "success" ? 120 : [100, 50, 100]);
+      }
+    
+      // 2. 播放 Web Audio 提示音
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+    
+        if (!audioCtx) {
+          audioCtx = new AudioContextClass();
+        }
+        if (audioCtx.state === "suspended") {
+          audioCtx.resume();
+        }
+    
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+    
+        // 成功用較清脆的高頻（如 1046Hz），重複或異常可用較低頻率區分
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(type === "success" ? 1046 : 440, audioCtx.currentTime);
+    
+        gainNode.gain.setValueAtTime(0.25, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+    
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+    
+        oscillator.start();
+        oscillator.stop(audioCtx.currentTime + 0.15);
+      } catch (e) {
+        console.warn("音效播放失敗：", e);
+      }
+    }
   </script>
 </body>
 </html>
