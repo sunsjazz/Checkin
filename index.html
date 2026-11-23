@@ -191,3 +191,287 @@
         label.includes("front") ||
         label.includes("facing front") ||
         label.includes("user") ||
+        label.includes("前置") ||
+        label.includes("自拍")
+      );
+    }
+
+    function filterUsableBackCameras(devices) {
+      const nonFront = devices.filter(d => !isFrontCamera(d));
+      const candidates = nonFront.length > 0 ? nonFront : devices;
+
+      const preferred = candidates.filter(d => {
+        const label = (d.label || "").toLowerCase();
+        return !label.includes("macro") && !label.includes("depth");
+      });
+
+      return preferred.length > 0 ? preferred : candidates;
+    }
+
+    window.onload = function() {
+      const savedStaff = localStorage.getItem('checkin_staff_name');
+      if (savedStaff) {
+        document.getElementById('staffName').value = savedStaff;
+      }
+
+      const savedPasscode = localStorage.getItem('checkin_passcode');
+      if (savedPasscode) {
+        document.getElementById('passcodeInput').value = savedPasscode;
+        verifyPasscode(true);
+      }
+    };
+
+    function verifyPasscode(isAutoLogin = false) {
+      if (!isAutoLogin) {
+        unlockAudio();
+      }
+
+      const inputVal = document.getElementById('passcodeInput').value.trim();
+      const errorEl = document.getElementById('auth-error');
+      const btn = document.getElementById('verifyBtn');
+
+      if (!inputVal) {
+        errorEl.innerText = "請輸入通行密碼！";
+        errorEl.style.display = 'block';
+        return;
+      }
+
+      errorEl.style.display = 'none';
+      btn.disabled = true;
+      btn.innerText = "驗證中，請稍候...";
+
+      fetch(GAS_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'verify',
+          passcode: inputVal
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success && data.status === 'VERIFIED') {
+          verifiedPasscode = inputVal;
+          localStorage.setItem('checkin_passcode', inputVal);
+          document.getElementById('auth-card').style.display = 'none';
+          document.getElementById('main-card').style.display = 'block';
+        } else {
+          localStorage.removeItem('checkin_passcode');
+          if (!isAutoLogin) {
+            errorEl.innerText = data.message || "密碼錯誤，請重新輸入！";
+            errorEl.style.display = 'block';
+          }
+        }
+      })
+      .catch(err => {
+        if (!isAutoLogin) {
+          errorEl.innerText = "連線失敗，請檢查網路狀態！";
+          errorEl.style.display = 'block';
+        }
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.innerText = "驗證並進入系統";
+      });
+    }
+
+    function logout() {
+      stopScanner();
+      verifiedPasscode = "";
+      localStorage.removeItem('checkin_passcode');
+      document.getElementById('passcodeInput').value = "";
+      document.getElementById('main-card').style.display = 'none';
+      document.getElementById('result-card').style.display = 'none';
+      document.getElementById('auth-card').style.display = 'block';
+    }
+
+    async function startScanner() {
+      unlockAudio();
+
+      const staffName = document.getElementById('staffName').value.trim();
+      if (!staffName) {
+        alert("請先輸入「接待同仁」姓名再開始掃描！");
+        document.getElementById('staffName').focus();
+        return;
+      }
+      localStorage.setItem('checkin_staff_name', staffName);
+
+      document.getElementById('reader').style.display = 'block';
+      document.getElementById('startBtn').style.display = 'none';
+      document.getElementById('controlGroup').style.display = 'flex';
+      document.getElementById('switchBtn').style.display = 'none';
+
+      if (!html5QrCode) {
+        html5QrCode = new Html5Qrcode("reader");
+      }
+
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        if (devices && devices.length > 0) {
+          backCameras = filterUsableBackCameras(devices);
+
+          const savedIndex = parseInt(localStorage.getItem('preferred_cam_index'), 10);
+          if (!isNaN(savedIndex) && savedIndex >= 0 && savedIndex < backCameras.length) {
+            currentCamIndex = savedIndex;
+          } else {
+            currentCamIndex = 0;
+          }
+
+          document.getElementById('switchBtn').style.display = backCameras.length > 1 ? 'block' : 'none';
+          await launchCameraByIndex(currentCamIndex);
+        } else {
+          document.getElementById('switchBtn').style.display = 'none';
+          await html5QrCode.start(
+            { facingMode: "environment" },
+            { fps: 10, qrbox: { width: 250, height: 250 } },
+            onScanSuccess
+          );
+        }
+      } catch (err) {
+        alert("無法啟動相機，請確認已允許瀏覽器使用相機權限。\n錯誤訊息：" + err);
+        resetButtons();
+      }
+    }
+
+    async function launchCameraByIndex(index) {
+      const cam = backCameras[index];
+      const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+
+      try {
+        await html5QrCode.start(cam.id, config, onScanSuccess);
+      } catch (err) {
+        if (backCameras.length > 1) {
+          backCameras.splice(index, 1);
+          currentCamIndex = 0;
+          localStorage.setItem('preferred_cam_index', '0');
+          document.getElementById('switchBtn').style.display = backCameras.length > 1 ? 'block' : 'none';
+        }
+        await html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess);
+      }
+
+      const infoEl = document.getElementById('camera-info');
+      infoEl.style.display = 'block';
+      infoEl.textContent = backCameras.length > 1
+        ? `目前鏡頭 (${currentCamIndex + 1}/${backCameras.length})：${cam?.label || '後置鏡頭'}`
+        : `目前鏡頭：${cam?.label || '後置主鏡頭'}`;
+    }
+
+    async function switchCamera() {
+      if (backCameras.length <= 1 || !html5QrCode) return;
+
+      const switchBtn = document.getElementById('switchBtn');
+      const stopBtn = document.getElementById('stopBtn');
+      switchBtn.disabled = true;
+      stopBtn.disabled = true;
+
+      try {
+        if (html5QrCode.isScanning) {
+          await html5QrCode.stop();
+        }
+        await html5QrCode.clear();
+        await sleep(350);
+
+        currentCamIndex = (currentCamIndex + 1) % backCameras.length;
+        localStorage.setItem('preferred_cam_index', String(currentCamIndex));
+
+        await launchCameraByIndex(currentCamIndex);
+      } catch (err) {
+        try {
+          await sleep(500);
+          await launchCameraByIndex(currentCamIndex);
+        } catch (retryErr) {
+          alert("切換鏡頭失敗，建議先按「關閉鏡頭」再重新開啟。\n原因：" + retryErr);
+          resetButtons();
+        }
+      } finally {
+        switchBtn.disabled = false;
+        stopBtn.disabled = false;
+      }
+    }
+
+    function stopScanner() {
+      if (html5QrCode) {
+        html5QrCode.stop().then(() => {
+          resetButtons();
+        }).catch(err => console.error("停止掃描失敗", err));
+      }
+    }
+
+    function resetButtons() {
+      document.getElementById('reader').style.display = 'none';
+      document.getElementById('camera-info').style.display = 'none';
+      document.getElementById('startBtn').style.display = 'block';
+      document.getElementById('controlGroup').style.display = 'none';
+    }
+
+    function onScanSuccess(decodedText) {
+      if (isProcessing) return;
+      isProcessing = true;
+
+      const staffName = document.getElementById('staffName').value.trim();
+      document.getElementById('loading').style.display = 'block';
+
+      fetch(GAS_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'checkin',
+          passcode: verifiedPasscode,
+          qrUrl: decodedText,
+          staffName: staffName
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.status === 'UNAUTHORIZED') {
+          playScanFeedback("warn");
+          alert(data.message);
+          logout();
+          return;
+        }
+        playScanFeedback(data.status === 'SUCCESS' ? "success" : "warn");
+        showResult(data);
+      })
+      .catch(error => {
+        playScanFeedback("warn");
+        showResult({
+          status: 'ERROR',
+          message: '❌ 連線失敗，請檢查網路狀態或 GAS 部署設定。',
+          detail: error.toString()
+        });
+      })
+      .finally(() => {
+        document.getElementById('loading').style.display = 'none';
+        setTimeout(() => {
+          isProcessing = false;
+        }, 2500);
+      });
+    }
+
+    function showResult(data) {
+      const card = document.getElementById('result-card');
+      const titleEl = document.getElementById('result-title');
+      const detailEl = document.getElementById('result-detail');
+
+      card.style.display = 'block';
+      card.className = 'card status-' + data.status;
+
+      void card.offsetWidth;
+      card.classList.add('result-flash');
+
+      titleEl.innerText = data.message;
+
+      if (data.status === 'SUCCESS' || data.status === 'ALREADY_CHECKED_IN') {
+        detailEl.innerHTML = `
+          <strong>姓名：</strong>${data.name}<br>
+          <strong>公司：</strong>${data.company}<br>
+          <strong>部門 / 職稱：</strong>${data.dept} ${data.title}<br>
+          <strong>報到時間：</strong>${data.checkinTime}
+        `;
+      } else {
+        detailEl.innerHTML = data.detail ? `<small>${data.detail}</small>` : '請重新確認 QR Code 內容。';
+      }
+    }
+  </script>
+</body>
+</html>
