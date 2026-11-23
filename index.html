@@ -336,26 +336,27 @@
     async function launchCameraByIndex(index) {
       const cam = backCameras[index];
       const config = { fps: 10, qrbox: { width: 250, height: 250 } };
-
+    
       try {
         await html5QrCode.start(cam.id, config, onScanSuccess);
       } catch (err) {
+        console.warn("指定鏡頭啟動失敗，嘗試改用 environment：", err);
         if (backCameras.length > 1) {
           backCameras.splice(index, 1);
           currentCamIndex = 0;
           localStorage.setItem('preferred_cam_index', '0');
           document.getElementById('switchBtn').style.display = backCameras.length > 1 ? 'block' : 'none';
         }
+        await sleep(300);
         await html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess);
       }
-
+    
       const infoEl = document.getElementById('camera-info');
       infoEl.style.display = 'block';
       infoEl.textContent = backCameras.length > 1
         ? `目前鏡頭 (${currentCamIndex + 1}/${backCameras.length})：${cam?.label || '後置鏡頭'}`
         : `目前鏡頭：${cam?.label || '後置主鏡頭'}`;
     }
-
     async function switchCamera() {
       if (backCameras.length <= 1 || !html5QrCode) return;
 
