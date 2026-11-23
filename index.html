@@ -27,6 +27,25 @@
     #camera-info { font-size: 12px; color: #666; text-align: center; margin-top: 6px; display: none; }
     .auth-error { color: #d93025; font-size: 14px; text-align: center; margin-top: 12px; display: none; font-weight: 600; }
     .logout-link { display: block; text-align: right; font-size: 13px; color: #666; margin-bottom: 12px; text-decoration: underline; cursor: pointer; }
+
+    @keyframes resultPop {
+      0% {
+        transform: scale(0.96);
+        box-shadow: 0 0 0 0 rgba(11, 87, 208, 0.45);
+      }
+      50% {
+        transform: scale(1.02);
+        box-shadow: 0 0 0 10px rgba(11, 87, 208, 0);
+      }
+      100% {
+        transform: scale(1);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      }
+    }
+    
+    .result-flash {
+      animation: resultPop 0.45s ease-out;
+    }
     
     /* 報到結果顯示區塊 */
     #result-card { display: none; border-left: 6px solid #ccc; }
@@ -36,6 +55,8 @@
     .result-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
     .guest-detail { font-size: 15px; line-height: 1.6; color: #222; }
     .loading { text-align: center; color: #0b57d0; font-weight: bold; margin-top: 12px; display: none; }
+
+    
   </style>
 </head>
 <body>
@@ -380,6 +401,32 @@
       card.className = 'card status-' + data.status;
       titleEl.innerText = data.message;
 
+      if (data.status === 'SUCCESS' || data.status === 'ALREADY_CHECKED_IN') {
+        detailEl.innerHTML = `
+          <strong>姓名：</strong>${data.name}<br>
+          <strong>公司：</strong>${data.company}<br>
+          <strong>部門 / 職稱：</strong>${data.dept} ${data.title}<br>
+          <strong>報到時間：</strong>${data.checkinTime}
+        `;
+      } else {
+        detailEl.innerHTML = data.detail ? `<small>${data.detail}</small>` : '請重新確認 QR Code 內容。';
+      }
+    }
+
+    function showResult(data) {
+      const card = document.getElementById('result-card');
+      const titleEl = document.getElementById('result-title');
+      const detailEl = document.getElementById('result-detail');
+    
+      card.style.display = 'block';
+      card.className = 'card status-' + data.status;
+    
+      // 重新觸發視覺跳動動畫
+      void card.offsetWidth;
+      card.classList.add('result-flash');
+    
+      titleEl.innerText = data.message;
+    
       if (data.status === 'SUCCESS' || data.status === 'ALREADY_CHECKED_IN') {
         detailEl.innerHTML = `
           <strong>姓名：</strong>${data.name}<br>
